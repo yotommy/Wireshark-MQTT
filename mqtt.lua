@@ -95,10 +95,18 @@ do
 		msg_types[12] = "PINGREQ"
 		msg_types[13] = "PINGRESP"
 		msg_types[14] = "DISCONNECT"
+		
+		-- TODO - 
+		-- http://stackoverflow.com/questions/14387426/reassembling-packets-in-a-lua-wireshark-dissector
+		-- May need to calculate length before calling subtree:add() in order to get the right params
+		
+		local offset = pinfo.desegment_offset or 0
+		if (offset > 0) then
+			debug("Found a non-zero offset: " .. offset)
+		end
+		local msgtype = buffer(offset, 1)
 
-		local msgtype = buffer(0, 1)
-
-		local offset = 1
+		offset = offset + 1
 		local remain_length =0 
 		offset, remain_length = lengthDecode(buffer, offset)
 
@@ -171,6 +179,7 @@ do
 				payload_subtree:add(f.connect_payload_password, password)
 			end
 
+			return offset
 
 		elseif(msgindex == 3) then -- PUBLISH
 			local varhdr_init = offset -- For calculating variable header size
@@ -192,10 +201,19 @@ do
 			local payload_subtree = subtree:add("Payload", nil)
 			-- Data
 			local data_len = remain_length - (offset - varhdr_init)
+
+			-- Check to see if buffer holds enough data;
+			-- if not, request another segment
+			if(buffer:len() - offset < data_len) then
+				return DESEGMENT_ONE_MORE_SEGMENT
+			end
+			
 			local data = buffer(offset, data_len)
 			offset = offset + data_len
 			payload_subtree:add(f.publish_data, data)
 
+			debug("After this PUBLISH, will return offset: " .. offset)
+			return offset
 
 		elseif(msgindex == 8) then -- SUBSCRIBE
 			local varheader_subtree = subtree:add("Variable Header", nil)
@@ -216,6 +234,8 @@ do
 				payload_subtree:add(f.subscribe_topic, topic)
 				payload_subtree:add(f.subscribe_qos, qos)
 			end
+			
+			return offset
 
 		elseif(msgindex == 9) then --SUBACK
 			local varheader_subtree = subtree:add("Variable Header", nil)
@@ -230,6 +250,14 @@ do
 				offset = offset + 1
 				payload_subtree:add(f.suback_qos, qos);
 			end
+			
+			return offset
+
+		elseif(msgindex == 12) then --PINGREQ
+			return offset
+
+		elseif(msgindex == 13) then --PINGRESP
+			return offset
 
 		else
 			if((buffer:len()-offset) > 0) then
