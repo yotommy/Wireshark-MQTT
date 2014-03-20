@@ -75,8 +75,8 @@ do
 			 multiplier = multiplier * 128
 		until (bitw.band(digit,128) == 0)
 		return offset, value
-	end
-
+	end -- lengthDecode
+	
 	-- The dissector function
 	function MQTTPROTO.dissector(buffer, pinfo, tree)
 		pinfo.cols.protocol = "MQTT"
@@ -101,174 +101,253 @@ do
 		-- May need to calculate length before calling subtree:add() in order to get the right params
 		
 		local offset = pinfo.desegment_offset or 0
-		if (offset > 0) then
-			debug("Found a non-zero offset: " .. offset)
-		end
-		local msgtype = buffer(offset, 1)
 
-		offset = offset + 1
-		local remain_length =0 
-		offset, remain_length = lengthDecode(buffer, offset)
+		local enough_data = true -- until we find otherwise
 
-		local msgindex = msgtype:bitfield(0,4)
+		repeat
+			local saved_offset = offset -- in case there is not enough data in buffer and we must rewind
 
-		local subtree = tree:add(MQTTPROTO, buffer())
-		local fixheader_subtree = subtree:add("Fixed Header", nil)
+			local msgtype = buffer(offset, 1)
 
-		subtree:append_text(", Message Type: " .. msg_types[msgindex])
-		pinfo.cols.info:set(msg_types[msgindex])
-
-		fixheader_subtree:add(f.message_type, msgtype)
-		fixheader_subtree:add(f.dup, msgtype)
-		fixheader_subtree:add(f.qos, msgtype)
-		fixheader_subtree:add(f.retain, msgtype)
-
-		fixheader_subtree:add(f.remain_length, remain_length)
-
-		local fixhdr_qos = msgtype:bitfield(5,2)
-		subtree:append_text(", QoS: " .. fixhdr_qos)
-
-		if(msgindex == 1) then -- CONNECT
-			local varheader_subtree = subtree:add("Variable Header", nil)
-
-			local name_len = buffer(offset, 2):uint()
-			offset = offset + 2
-			local name = buffer(offset, name_len)
-			offset = offset + name_len
-			local version = buffer(offset, 1)
 			offset = offset + 1
-			local flags = buffer(offset, 1)
-			offset = offset + 1
-			local keepalive = buffer(offset, 2)
-			offset = offset + 2
+			local remain_length =0 
+			offset, remain_length = lengthDecode(buffer, offset)
 
-			varheader_subtree:add(f.connect_protocol_name, name)
-			varheader_subtree:add(f.connect_protocol_version, version)
+			local msgindex = msgtype:bitfield(0,4)
 
-			local flags_subtree = varheader_subtree:add("Flags", nil)
-			flags_subtree:add(f.connect_username, flags)
-			flags_subtree:add(f.connect_password, flags)
-			flags_subtree:add(f.connect_will_retain, flags)
-			flags_subtree:add(f.connect_will_qos, flags)
-			flags_subtree:add(f.connect_will, flags)
-			flags_subtree:add(f.connect_clean_session, flags)
+			if(msgindex == 1) then -- CONNECT
+				local subtree = tree:add(MQTTPROTO, buffer())
+				local fixheader_subtree = subtree:add("Fixed Header", nil)
 
-			varheader_subtree:add(f.connect_keep_alive, keepalive)
+				subtree:append_text(", Message Type: " .. msg_types[msgindex])
+				pinfo.cols.info:set(msg_types[msgindex])
 
-			local payload_subtree = subtree:add("Payload", nil)
-			-- Client ID
-			local clientid_len = buffer(offset, 2):uint()
-			offset = offset + 2
-			local clientid = buffer(offset, clientid_len)
-			offset = offset + clientid_len
-			payload_subtree:add(f.connect_payload_clientid, clientid)
-			-- Flags
-			if(flags:bitfield(0) == 1) then -- Username flag is true
-				local username_len = buffer(offset, 2):uint()
+				fixheader_subtree:add(f.message_type, msgtype)
+				fixheader_subtree:add(f.dup, msgtype)
+				fixheader_subtree:add(f.qos, msgtype)
+				fixheader_subtree:add(f.retain, msgtype)
+
+				fixheader_subtree:add(f.remain_length, remain_length)
+
+				local fixhdr_qos = msgtype:bitfield(5,2)
+				subtree:append_text(", QoS: " .. fixhdr_qos)
+				
+				local varheader_subtree = subtree:add("Variable Header", nil)
+
+				local name_len = buffer(offset, 2):uint()
 				offset = offset + 2
-				local username = buffer(offset, username_len)
-				offset = offset + username_len
-				payload_subtree:add(f.connect_payload_username, username)
-			end
-
-			if(flags:bitfield(1) == 1) then -- Password flag is true
-				local password_len = buffer(offset, 2):uint()
+				local name = buffer(offset, name_len)
+				offset = offset + name_len
+				local version = buffer(offset, 1)
+				offset = offset + 1
+				local flags = buffer(offset, 1)
+				offset = offset + 1
+				local keepalive = buffer(offset, 2)
 				offset = offset + 2
-				local password = buffer(offset, password_len)
-				offset = offset + password_len
-				payload_subtree:add(f.connect_payload_password, password)
-			end
 
-			return offset
+				varheader_subtree:add(f.connect_protocol_name, name)
+				varheader_subtree:add(f.connect_protocol_version, version)
 
-		elseif(msgindex == 3) then -- PUBLISH
-			local varhdr_init = offset -- For calculating variable header size
-			local varheader_subtree = subtree:add("Variable Header", nil)
+				local flags_subtree = varheader_subtree:add("Flags", nil)
+				flags_subtree:add(f.connect_username, flags)
+				flags_subtree:add(f.connect_password, flags)
+				flags_subtree:add(f.connect_will_retain, flags)
+				flags_subtree:add(f.connect_will_qos, flags)
+				flags_subtree:add(f.connect_will, flags)
+				flags_subtree:add(f.connect_clean_session, flags)
 
-			local topic_len = buffer(offset, 2):uint()
-			offset = offset + 2
-			local topic = buffer(offset, topic_len)
-			offset = offset + topic_len
+				varheader_subtree:add(f.connect_keep_alive, keepalive)
 
-			varheader_subtree:add(f.publish_topic, topic)
-
-			if(fixhdr_qos > 0) then
-				local message_id = buffer(offset, 2)
+				local payload_subtree = subtree:add("Payload", nil)
+				-- Client ID
+				local clientid_len = buffer(offset, 2):uint()
 				offset = offset + 2
-				varheader_subtree:add(f.publish_message_id, message_id)
-			end
+				local clientid = buffer(offset, clientid_len)
+				offset = offset + clientid_len
+				payload_subtree:add(f.connect_payload_clientid, clientid)
+				-- Flags
+				if(flags:bitfield(0) == 1) then -- Username flag is true
+					local username_len = buffer(offset, 2):uint()
+					offset = offset + 2
+					local username = buffer(offset, username_len)
+					offset = offset + username_len
+					payload_subtree:add(f.connect_payload_username, username)
+				end
 
-			local payload_subtree = subtree:add("Payload", nil)
-			-- Data
-			local data_len = remain_length - (offset - varhdr_init)
+				if(flags:bitfield(1) == 1) then -- Password flag is true
+					local password_len = buffer(offset, 2):uint()
+					offset = offset + 2
+					local password = buffer(offset, password_len)
+					offset = offset + password_len
+					payload_subtree:add(f.connect_payload_password, password)
+				end
+				
+				return
 
-			-- Check to see if buffer holds enough data;
-			-- if not, request another segment
-			if(buffer:len() - offset < data_len) then
-				return DESEGMENT_ONE_MORE_SEGMENT
-			end
-			
-			local data = buffer(offset, data_len)
-			offset = offset + data_len
-			payload_subtree:add(f.publish_data, data)
+			elseif(msgindex == 3) then -- PUBLISH
+				local varhdr_init = offset -- For calculating variable header size
 
-			debug("After this PUBLISH, will return offset: " .. offset)
-			return offset
-
-		elseif(msgindex == 8) then -- SUBSCRIBE
-			local varheader_subtree = subtree:add("Variable Header", nil)
-
-			local message_id = buffer(offset, 2)
-			offset = offset + 2
-			varheader_subtree:add(f.subscribe_message_id, message_id)
-
-			local payload_subtree = subtree:add("Payload", nil)
-			while(offset < buffer:len()) do
 				local topic_len = buffer(offset, 2):uint()
 				offset = offset + 2
 				local topic = buffer(offset, topic_len)
 				offset = offset + topic_len
-				local qos = buffer(offset, 1)
-				offset = offset + 1
 
-				payload_subtree:add(f.subscribe_topic, topic)
-				payload_subtree:add(f.subscribe_qos, qos)
-			end
-			
-			return offset
+				local message_id
+				local fixhdr_qos = msgtype:bitfield(5,2)
+				if(fixhdr_qos > 0) then
+					message_id = buffer(offset, 2)
+					offset = offset + 2
+				end
 
-		elseif(msgindex == 9) then --SUBACK
-			local varheader_subtree = subtree:add("Variable Header", nil)
+				-- Data
+				-- remain_len: number of MQTT bytes specified to follow fixed header
+				-- data_len:   number of MQTT bytes specified to follow variable header
+				local data_len = remain_length - (offset - varhdr_init)
 
-			local message_id = buffer(offset, 2)
-			offset = offset + 2
-			varheader_subtree:add(f.suback_message_id, message_id)
+				-- Check to see if buffer holds enough data;
+				-- if not, request another segment
+				if(buffer:len() - offset < data_len) then
+					pinfo.desegment_len = data_len - (buffer:len()-offset)
+					pinfo.desegment_offset = saved_offset
+					return
+				end
+				
+				-- we have enough data, so create the subtree
+				local subtree = tree:add(MQTTPROTO, buffer(saved_offset, remain_length + 2))
+				local fixheader_subtree = subtree:add("Fixed Header", nil)
 
-			local payload_subtree = subtree:add("Payload", nil)
-			while(offset < buffer:len()) do
-				local qos = buffer(offset, 1)
-				offset = offset + 1
-				payload_subtree:add(f.suback_qos, qos);
-			end
-			
-			return offset
+				subtree:append_text(", Message Type: " .. msg_types[msgindex])
+				pinfo.cols.info:set(msg_types[msgindex])
 
-		elseif(msgindex == 12) then --PINGREQ
-			return offset
+				fixheader_subtree:add(f.message_type, msgtype)
+				fixheader_subtree:add(f.dup, msgtype)
+				fixheader_subtree:add(f.qos, msgtype)
+				fixheader_subtree:add(f.retain, msgtype)
 
-		elseif(msgindex == 13) then --PINGRESP
-			return offset
+				fixheader_subtree:add(f.remain_length, remain_length)
 
-		else
-			if((buffer:len()-offset) > 0) then
+				local fixhdr_qos = msgtype:bitfield(5,2)
+				subtree:append_text(", QoS: " .. fixhdr_qos)
+				
+				local varheader_subtree = subtree:add("Variable Header", nil)
+				varheader_subtree:add(f.publish_topic, topic)
+				if(fixhdr_qos > 0) then
+					varheader_subtree:add(f.publish_message_id, message_id)
+				end
 				local payload_subtree = subtree:add("Payload", nil)
-				payload_subtree:add(f.payload_data, buffer(offset, buffer:len()-offset))
+			
+				local data = buffer(offset, data_len)
+				offset = offset + data_len
+				payload_subtree:add(f.publish_data, data)
+				
+				if(buffer:len() == offset) then
+					return remain_length + 2
+				end
+
+			elseif(msgindex == 8) then -- SUBSCRIBE
+				local subtree = tree:add(MQTTPROTO, buffer())
+				local fixheader_subtree = subtree:add("Fixed Header", nil)
+
+				subtree:append_text(", Message Type: " .. msg_types[msgindex])
+				pinfo.cols.info:set(msg_types[msgindex])
+
+				fixheader_subtree:add(f.message_type, msgtype)
+				fixheader_subtree:add(f.dup, msgtype)
+				fixheader_subtree:add(f.qos, msgtype)
+				fixheader_subtree:add(f.retain, msgtype)
+
+				fixheader_subtree:add(f.remain_length, remain_length)
+
+				local fixhdr_qos = msgtype:bitfield(5,2)
+				subtree:append_text(", QoS: " .. fixhdr_qos)
+				
+				local varheader_subtree = subtree:add("Variable Header", nil)
+
+				local message_id = buffer(offset, 2)
+				offset = offset + 2
+				varheader_subtree:add(f.subscribe_message_id, message_id)
+
+				local payload_subtree = subtree:add("Payload", nil)
+				while(offset < buffer:len()) do
+					local topic_len = buffer(offset, 2):uint()
+					offset = offset + 2
+					local topic = buffer(offset, topic_len)
+					offset = offset + topic_len
+					local qos = buffer(offset, 1)
+					offset = offset + 1
+
+					payload_subtree:add(f.subscribe_topic, topic)
+					payload_subtree:add(f.subscribe_qos, qos)
+				end
+				
+				return
+
+			elseif(msgindex == 9) then --SUBACK
+				local subtree = tree:add(MQTTPROTO, buffer())
+				local fixheader_subtree = subtree:add("Fixed Header", nil)
+
+				subtree:append_text(", Message Type: " .. msg_types[msgindex])
+				pinfo.cols.info:set(msg_types[msgindex])
+
+				fixheader_subtree:add(f.message_type, msgtype)
+				fixheader_subtree:add(f.dup, msgtype)
+				fixheader_subtree:add(f.qos, msgtype)
+				fixheader_subtree:add(f.retain, msgtype)
+
+				fixheader_subtree:add(f.remain_length, remain_length)
+
+				local fixhdr_qos = msgtype:bitfield(5,2)
+				subtree:append_text(", QoS: " .. fixhdr_qos)
+				
+				local varheader_subtree = subtree:add("Variable Header", nil)
+
+				local message_id = buffer(offset, 2)
+				offset = offset + 2
+				varheader_subtree:add(f.suback_message_id, message_id)
+
+				local payload_subtree = subtree:add("Payload", nil)
+				while(offset < buffer:len()) do
+					local qos = buffer(offset, 1)
+					offset = offset + 1
+					payload_subtree:add(f.suback_qos, qos);
+				end
+				
+				return
+
+			else
+				local subtree = tree:add(MQTTPROTO, buffer())
+				local fixheader_subtree = subtree:add("Fixed Header", nil)
+
+				subtree:append_text(", Message Type: " .. msg_types[msgindex])
+				pinfo.cols.info:set(msg_types[msgindex])
+
+				fixheader_subtree:add(f.message_type, msgtype)
+				fixheader_subtree:add(f.dup, msgtype)
+				fixheader_subtree:add(f.qos, msgtype)
+				fixheader_subtree:add(f.retain, msgtype)
+
+				fixheader_subtree:add(f.remain_length, remain_length)
+
+				local fixhdr_qos = msgtype:bitfield(5,2)
+				subtree:append_text(", QoS: " .. fixhdr_qos)
+				
+				if((buffer:len()-offset) > 0) then
+					local payload_subtree = subtree:add("Payload", nil)
+					payload_subtree:add(f.payload_data, buffer(offset, buffer:len()-offset))
+				end
+				
+				return
 			end
-		end
+			
+		until not enough_data -- end repeat
 
 	end
 
 	-- Register the dissector
-	tcp_table = DissectorTable.get("tcp.port")
+	local tcp_table = DissectorTable.get("tcp.port")
 	tcp_table:add(1883, MQTTPROTO)
+	-- tcp_table:add(58058, MQTTPROTO)
+
+    local wtap_encap_table = DissectorTable.get("wtap_encap")
+    wtap_encap_table:add(wtap.USER15, MQTTPROTO)
 end
