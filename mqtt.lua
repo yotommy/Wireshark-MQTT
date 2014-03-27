@@ -42,6 +42,10 @@ do
 	f.connect_payload_clientid = ProtoField.string("mqtt.connect.payload.clientid", "Client ID")
 	f.connect_payload_username = ProtoField.string("mqtt.connect.payload.username", "Username")
 	f.connect_payload_password = ProtoField.string("mqtt.connect.payload.password", "Password")
+	
+	-- Connack
+	f.connack_code = ProtoField.string("mqtt.connack.return_code", "Return Code")
+	f.connack_reason = ProtoField.string("mqtt.connack.return_reason", "Reason Phrase")
 
 	-- Publish
 	f.publish_topic = ProtoField.string("mqtt.publish.topic", "Topic")
@@ -96,9 +100,20 @@ do
 		msg_types[13] = "PINGRESP"
 		msg_types[14] = "DISCONNECT"
 		
+		local connack_return_reasons = { 0, 1, 2, 3, 4, 5 }
+		connack_return_reasons[0] = "Connection Accepted"
+		connack_return_reasons[1] = "Connection Refused: unacceptable protocol version"
+		connack_return_reasons[2] = "Connection Refused: identifier rejected"
+		connack_return_reasons[3] = "Connection Refused: server unavailable"
+		connack_return_reasons[4] = "Connection Refused: bad user name or password"
+		connack_return_reasons[5] = "Connection Refused: not authorized"
+		for i=6, 266 do
+			connack_return_reasons[i] = "Reserved for future use"
+		end
+		
 		-- TODO - 
-		-- http://stackoverflow.com/questions/14387426/reassembling-packets-in-a-lua-wireshark-dissector
-		-- May need to calculate length before calling subtree:add() in order to get the right params
+		-- Refactor so that all message types can cross segment boundaries
+		-- (rather than just PUBLISH)
 		
 		local offset = pinfo.desegment_offset or 0
 
@@ -183,6 +198,43 @@ do
 				end
 				
 				return
+			elseif(msgindex == 2) then -- CONNACK
+			    local subtree = tree:add(MQTTPROTO, buffer())
+				local fixheader_subtree = subtree:add("Fixed Header", nil)
+
+				subtree:append_text(", Message Type: " .. msg_types[msgindex])
+				-- pinfo.cols.info:set(msg_types[msgindex])
+
+				fixheader_subtree:add(f.message_type, msgtype)
+				fixheader_subtree:add(f.dup, msgtype)
+				fixheader_subtree:add(f.qos, msgtype)
+				fixheader_subtree:add(f.retain, msgtype)
+
+				fixheader_subtree:add(f.remain_length, remain_length)
+
+				local fixhdr_qos = msgtype:bitfield(5,2)
+				subtree:append_text(", QoS: " .. fixhdr_qos)
+				
+				local varheader_subtree = subtree:add("Variable Header", nil)
+
+
+				local unused = buffer(offset, 1)
+				offset = offset + 1
+				local return_code = buffer(offset, 1):uint()
+				local return_text = connack_return_reasons[return_code]
+				pinfo.cols.info:set(msg_types[msgindex] .. ", " .. return_text)
+				varheader_subtree:add(f.connack_code, return_code)
+				varheader_subtree:add(f.connack_reason, return_text)
+
+				local payload_subtree = subtree:add("Payload", nil)
+				while(offset < buffer:len()) do
+					local qos = buffer(offset, 1)
+					offset = offset + 1
+					payload_subtree:add(f.suback_qos, qos);
+				end
+				
+				return
+				
 
 			elseif(msgindex == 3) then -- PUBLISH
 				local varhdr_init = offset -- For calculating variable header size
