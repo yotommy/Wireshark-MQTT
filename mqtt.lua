@@ -118,6 +118,8 @@ do
       offset, remain_length = lengthDecode(buffer, offset)
 
       local msgindex = msgtype:bitfield(0,4)
+      
+      local bytes_remaining = 0
 
       if(msgindex == 1) then -- CONNECT
         local subtree = tree:add(MQTTPROTO, buffer())
@@ -186,6 +188,8 @@ do
           payload_subtree:add(f.connect_payload_password, password)
         end
         
+        bytes_remaining = buffer:len() - offset
+        
       elseif(msgindex == 2) then -- CONNACK
         local subtree = tree:add(MQTTPROTO, buffer())
         local fixheader_subtree = subtree:add("Fixed Header", nil)
@@ -208,17 +212,13 @@ do
         local unused = buffer(offset, 1)
         offset = offset + 1
         local return_code = buffer(offset, 1):uint()
+        offset = offset + 1
         local return_text = connack_return_reasons[return_code]
         pinfo.cols.info:set(msg_types[msgindex] .. ", " .. return_text)
         varheader_subtree:add(f.connack_code, return_code)
         varheader_subtree:add(f.connack_reason, return_text)
-
-        local payload_subtree = subtree:add("Payload", nil)
-        while(offset < buffer:len()) do
-          local qos = buffer(offset, 1)
-          offset = offset + 1
-          payload_subtree:add(f.suback_qos, qos);
-        end
+        
+        bytes_remaining = buffer:len() - offset
         
       elseif(msgindex == 3) then -- PUBLISH
         local varhdr_init = offset -- For calculating variable header size
@@ -240,15 +240,6 @@ do
         -- data_len:   number of MQTT bytes specified to follow variable header
         local data_len = remain_length - (offset - varhdr_init)
 
-        -- Check to see if buffer holds enough data;
-        -- if not, request another segment
-        -- if(buffer:len() - offset < data_len) then
-          -- pinfo.desegment_len = data_len - (buffer:len()-offset)
-          -- pinfo.desegment_offset = saved_offset
-          -- return
-        -- end
-        
-        -- we have enough data, so create the subtree
         local subtree = tree:add(MQTTPROTO, buffer(saved_offset, remain_length + 2))
         local fixheader_subtree = subtree:add("Fixed Header", nil)
 
@@ -276,9 +267,7 @@ do
         offset = offset + data_len
         payload_subtree:add(f.publish_data, data)
         
-        -- if(buffer:len() == offset) then
-          -- return remain_length + 2
-        -- end
+        bytes_remaining = buffer:len() - offset
 
       elseif(msgindex == 8) then -- SUBSCRIBE
         local subtree = tree:add(MQTTPROTO, buffer())
@@ -316,6 +305,8 @@ do
           payload_subtree:add(f.subscribe_qos, qos)
         end
         
+        bytes_remaining = buffer:len() - offset
+        
       elseif(msgindex == 9) then --SUBACK
         local subtree = tree:add(MQTTPROTO, buffer())
         local fixheader_subtree = subtree:add("Fixed Header", nil)
@@ -346,6 +337,8 @@ do
           payload_subtree:add(f.suback_qos, qos);
         end
         
+        bytes_remaining = buffer:len() - offset
+        
       else
         -- TODO: this one is dangerous since it adds the whole buffer at the end.
         -- It is possible that part of the buffer belongs to the next MQTT PDU.
@@ -373,8 +366,7 @@ do
         end    
       end
 	  
-	  -- No bytes left in buffer
-	  return -1
+	  return bytes_remaining
 	end
 	
 	-- The dissector function
@@ -389,19 +381,19 @@ do
       
       -- Three possibilities:
       -- (1) We extracted an MQTT PDU and no bytes remain
-      --     (complete_pdu = true, new_offset = -1) => return
+      --     (complete_pdu = true, new_offset == 0) => return
       
       -- (2) We extracted an MQTT PDU and bytes remain
-      --     (complete_pdu = true, new_offset >= 0) => continue looping
+      --     (complete_pdu = true, new_offset > 0) => continue looping
       
       -- (3) We did not have enough data to extract an MQTT PDU
       --     (complete_pdu = false) => set pinfo.desegment_len and return
       
       -- TODO NEXT => properly set new_offset in dissect_mqtt_pdus
       
-		until not (complete_pdu and (new_offset >= 0))
+		until not (complete_pdu and (new_offset > 0))
 		
-		if (new_offset >= 0) then
+		if (new_offset > 0) then
 		  pinfo.desegment_offset = new_offset
 		  pinfo.desegment_len = DESEGMENT_ONE_MORE_SEGMENT
 		end 
