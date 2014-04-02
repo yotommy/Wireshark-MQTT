@@ -1,2 +1,38 @@
-- CONNACK Return codes
 - Unsubscribe Payload
+
+Getting incorrect message type after segment > one PDU:
+
+5987 0.000035   4.508335    10.57.0.7 45221 10.57.0.4    1883 MQTT 1514 PUBLISH
+5990 0.000055   4.508488    10.57.0.7 45213 10.57.0.4    1883 MQTT 1514 PUBLISH
+5992 0.000107   4.508602    10.57.0.7 45221 10.57.0.4    1883 MQTT 684 CONNACK, Reserved for future use
+
+complete_pdu = true, new_offset = 0
+pinfo.desegment_offset=0
+pinfo.desegment_len=0
+got some extra right here, setting new_offset = 1033
+complete_pdu = true, new_offset = 1033
+### at this point we want to loop and start at 1033
+pinfo.desegment_offset = 1033
+complete_pdu = false, new_offset = ...th/devel/wireshark/mqtt/Wireshark-MQTT-Fork/mqtt.lua:250: Range is out of bounds
+###
+### At this point we want to tell wireshark that:
+###   we need more bytes, AND
+###   the next PDU should start at 1033
+###
+### HOWEVER, when this is invoked again, pinfo.desegment_offset is set to 0
+### and apparently we are only given the next TCP segment, not the remaining
+### part of the previous TCP segment.
+###
+### HMMMMM, is the function properly returning control to Wireshark at this point???
+###
+complete_pdu = true, new_offset = 4
+pinfo.desegment_offset = 4
+complete_pdu = true, new_offset = 8
+pinfo.desegment_offset = 8
+complete_pdu = true, new_offset = 12
+pinfo.desegment_offset = 12
+complete_pdu = true, new_offset = 16
+pinfo.desegment_offset = 16
+complete_pdu = true, new_offset = 20
+pinfo.desegment_offset = 20
+
