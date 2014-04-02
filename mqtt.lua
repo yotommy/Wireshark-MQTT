@@ -107,7 +107,7 @@ do
   for i=6, 256 do
     connack_return_reasons[i] = "Reserved for future use"
   end
-	
+  
 	function dissect_mqtt_pdus(buffer, pinfo, tree)
 	    local offset = pinfo.desegment_offset or 0
 	    local saved_offset = offset -- in case there is not enough data in buffer and we must rewind
@@ -187,7 +187,7 @@ do
         end
         
       elseif(msgindex == 2) then -- CONNACK
-          local subtree = tree:add(MQTTPROTO, buffer())
+        local subtree = tree:add(MQTTPROTO, buffer())
         local fixheader_subtree = subtree:add("Fixed Header", nil)
 
         subtree:append_text(", Message Type: " .. msg_types[msgindex])
@@ -204,7 +204,6 @@ do
         subtree:append_text(", QoS: " .. fixhdr_qos)
         
         local varheader_subtree = subtree:add("Variable Header", nil)
-
 
         local unused = buffer(offset, 1)
         offset = offset + 1
@@ -243,11 +242,11 @@ do
 
         -- Check to see if buffer holds enough data;
         -- if not, request another segment
-        if(buffer:len() - offset < data_len) then
-          pinfo.desegment_len = data_len - (buffer:len()-offset)
-          pinfo.desegment_offset = saved_offset
-          return
-        end
+        -- if(buffer:len() - offset < data_len) then
+          -- pinfo.desegment_len = data_len - (buffer:len()-offset)
+          -- pinfo.desegment_offset = saved_offset
+          -- return
+        -- end
         
         -- we have enough data, so create the subtree
         local subtree = tree:add(MQTTPROTO, buffer(saved_offset, remain_length + 2))
@@ -277,9 +276,9 @@ do
         offset = offset + data_len
         payload_subtree:add(f.publish_data, data)
         
-        if(buffer:len() == offset) then
-          return remain_length + 2
-        end
+        -- if(buffer:len() == offset) then
+          -- return remain_length + 2
+        -- end
 
       elseif(msgindex == 8) then -- SUBSCRIBE
         local subtree = tree:add(MQTTPROTO, buffer())
@@ -348,6 +347,10 @@ do
         end
         
       else
+        -- TODO: this one is dangerous since it adds the whole buffer at the end.
+        -- It is possible that part of the buffer belongs to the next MQTT PDU.
+        -- So the right thing is to parse each subtype correctly so we know.
+        --
         local subtree = tree:add(MQTTPROTO, buffer())
         local fixheader_subtree = subtree:add("Fixed Header", nil)
 
@@ -367,15 +370,11 @@ do
         if((buffer:len()-offset) > 0) then
           local payload_subtree = subtree:add("Payload", nil)
           payload_subtree:add(f.payload_data, buffer(offset, buffer:len()-offset))
-        end
-        
-        -- if we get here, then there was enough data to dissect
-        -- a complete MQTT PDU
-        return true
+        end    
       end
 	  
-	  
-	  return enough_data
+	  -- No bytes left in buffer
+	  return -1
 	end
 	
 	-- The dissector function
@@ -385,25 +384,28 @@ do
 		local enough_data = true -- until we learn otherwise
 		
 		repeat
-      -- local success, result = xpcall(dissect_mqtt_pdus(buffer, pinfo, tree), function (msg) return msg..'\n'..debug.traceback()..'\n' end)
-      local success = pcall(dissect_mqtt_pdus(buffer, pinfo, tree))
-      debug("status = " .. tostring(success))
+      local complete_pdu, new_offset = pcall(dissect_mqtt_pdus, buffer, pinfo, tree)
+      debug("complete_pdu = " .. tostring(complete_pdu) .. ", new_offset = " .. tostring(new_offset))
       
-      -- dissect_mqtt_pdus(buffer, pinfo, tree)
-
-      -- TODO: check status, revise loop logic, set appropriate return values of pinfo
-      if pinfo.desegment_len ~= DESEGMENT_ONE_MORE_SEGMENT then
-        -- We have dissected one or more complete MQTT PDUs, and there
-        -- is no more data to dissect, so we are done.
-        return
-      end
-		until not enough_data 
+      -- Three possibilities:
+      -- (1) We extracted an MQTT PDU and no bytes remain
+      --     (complete_pdu = true, new_offset = -1) => return
+      
+      -- (2) We extracted an MQTT PDU and bytes remain
+      --     (complete_pdu = true, new_offset >= 0) => continue looping
+      
+      -- (3) We did not have enough data to extract an MQTT PDU
+      --     (complete_pdu = false) => set pinfo.desegment_len and return
+      
+      -- TODO NEXT => properly set new_offset in dissect_mqtt_pdus
+      
+		until not (complete_pdu and (new_offset >= 0))
 		
-		-- Not enough data in this TCP segment to complete MQTT PDU,
-		-- so signal wireshark to invoke us again with more data.
-		--
-		-- pinfo will be appropriately set
-		--
+		if (new_offset >= 0) then
+		  pinfo.desegment_offset = new_offset
+		  pinfo.desegment_len = DESEGMENT_ONE_MORE_SEGMENT
+		end 
+		
     return		
 	end
 
