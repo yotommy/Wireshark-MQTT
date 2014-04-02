@@ -119,7 +119,7 @@ do
 
       local msgindex = msgtype:bitfield(0,4)
       
-      local bytes_remaining = 0
+      local new_offset = 0
 
       if(msgindex == 1) then -- CONNECT
         local subtree = tree:add(MQTTPROTO, buffer())
@@ -188,7 +188,9 @@ do
           payload_subtree:add(f.connect_payload_password, password)
         end
         
-        bytes_remaining = buffer:len() - offset
+        if (buffer:len() > offset) then
+          new_offset = offset
+        end
         
       elseif(msgindex == 2) then -- CONNACK
         local subtree = tree:add(MQTTPROTO, buffer())
@@ -218,7 +220,9 @@ do
         varheader_subtree:add(f.connack_code, return_code)
         varheader_subtree:add(f.connack_reason, return_text)
         
-        bytes_remaining = buffer:len() - offset
+        if (buffer:len() > offset) then
+          new_offset = offset
+        end
         
       elseif(msgindex == 3) then -- PUBLISH
         local varhdr_init = offset -- For calculating variable header size
@@ -267,7 +271,9 @@ do
         offset = offset + data_len
         payload_subtree:add(f.publish_data, data)
         
-        bytes_remaining = buffer:len() - offset
+        if (buffer:len() > offset) then
+          new_offset = offset
+        end
 
       elseif(msgindex == 8) then -- SUBSCRIBE
         local subtree = tree:add(MQTTPROTO, buffer())
@@ -305,7 +311,9 @@ do
           payload_subtree:add(f.subscribe_qos, qos)
         end
         
-        bytes_remaining = buffer:len() - offset
+        if (buffer:len() > offset) then
+          new_offset = offset
+        end
         
       elseif(msgindex == 9) then --SUBACK
         local subtree = tree:add(MQTTPROTO, buffer())
@@ -337,7 +345,9 @@ do
           payload_subtree:add(f.suback_qos, qos);
         end
         
-        bytes_remaining = buffer:len() - offset
+        if (buffer:len() > offset) then
+          new_offset = offset
+        end
         
       else
         -- TODO: this one is dangerous since it adds the whole buffer at the end.
@@ -366,18 +376,18 @@ do
         end    
       end
 	  
-	  return bytes_remaining
+	  return new_offset
 	end
 	
 	-- The dissector function
 	function MQTTPROTO.dissector(buffer, pinfo, tree)
 		pinfo.cols.protocol = "MQTT"
 		
-		local enough_data = true -- until we learn otherwise
+		local complete_pdu
+		local new_offset = 0
 		
 		repeat
-      local complete_pdu, new_offset = pcall(dissect_mqtt_pdus, buffer, pinfo, tree)
-      debug("complete_pdu = " .. tostring(complete_pdu) .. ", new_offset = " .. tostring(new_offset))
+      complete_pdu, result = pcall(dissect_mqtt_pdus, buffer, pinfo, tree)
       
       -- Three possibilities:
       -- (1) We extracted an MQTT PDU and no bytes remain
@@ -388,16 +398,18 @@ do
       
       -- (3) We did not have enough data to extract an MQTT PDU
       --     (complete_pdu = false) => set pinfo.desegment_len and return
-      
-      -- TODO NEXT => properly set new_offset in dissect_mqtt_pdus
-      
-		until not (complete_pdu and (new_offset > 0))
+      --
+      if (complete_pdu) then
+        new_offset = result
+        pinfo.desegment_offset = new_offset
+      end
+		until (not (complete_pdu) or (new_offset == 0))
 		
 		if (new_offset > 0) then
 		  pinfo.desegment_offset = new_offset
 		  pinfo.desegment_len = DESEGMENT_ONE_MORE_SEGMENT
 		end 
-		
+
     return		
 	end
 
