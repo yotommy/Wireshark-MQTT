@@ -57,13 +57,16 @@ do
 	f.subscribe_topic = ProtoField.string("mqtt.subscribe.topic", "Topic")
 	f.subscribe_qos = ProtoField.uint8("mqtt.subscribe.qos", "QoS")
 
-	-- SubAck
-	f.suback_qos = ProtoField.uint8("mqtt.suback.qos", "QoS")
-
 	-- Suback
 	f.suback_message_id = ProtoField.uint16("mqtt.suback.message_id", "Message ID")
 	f.suback_qos = ProtoField.uint8("mqtt.suback.qos", "QoS")
-	--
+	
+	-- Unsubscribe
+  f.unsubscribe_message_id = ProtoField.uint16("mqtt.unsubscribe.message_id", "Message ID")
+  f.unsubscribe_topic = ProtoField.string("mqtt.unsubscribe.topic", "Topic")	
+	
+	-- common
+	f.message_id = ProtoField.bytes("mqtt.message_id", "Message ID")
 	f.payload_data = ProtoField.bytes("mqtt.payload", "Payload Data")
 
 	-- decoding of fixed header remaining length
@@ -275,6 +278,35 @@ do
           new_offset = offset
         end
 
+      elseif(msgindex >= 4 and msgindex <= 7 or msgindex == 11) then -- all handled the same
+        local subtree = tree:add(MQTTPROTO, buffer())
+        local fixheader_subtree = subtree:add("Fixed Header", nil)
+
+        subtree:append_text(", Message Type: " .. msg_types[msgindex])
+        pinfo.cols.info:set(msg_types[msgindex])
+
+        fixheader_subtree:add(f.message_type, msgtype)
+        fixheader_subtree:add(f.dup, msgtype)
+        fixheader_subtree:add(f.qos, msgtype)
+        fixheader_subtree:add(f.retain, msgtype)
+
+        fixheader_subtree:add(f.remain_length, remain_length)
+
+        local fixhdr_qos = msgtype:bitfield(5,2)
+        subtree:append_text(", QoS: " .. fixhdr_qos)
+        
+        local varheader_subtree = subtree:add("Variable Header", nil)
+
+        local message_id = buffer(offset, 2)
+        offset = offset + 2
+        -- TODO: change the field type for individual message?
+        -- Could factor out most of this code into a helper function
+        varheader_subtree:add(f.message_id, message_id)
+                
+        if (buffer:len() > offset) then
+          new_offset = offset
+        end
+
       elseif(msgindex == 8) then -- SUBSCRIBE
         local subtree = tree:add(MQTTPROTO, buffer())
         local fixheader_subtree = subtree:add("Fixed Header", nil)
@@ -349,11 +381,7 @@ do
           new_offset = offset
         end
         
-      else
-        -- TODO: this one is dangerous since it adds the whole buffer at the end.
-        -- It is possible that part of the buffer belongs to the next MQTT PDU.
-        -- So the right thing is to parse each subtype correctly so we know.
-        --
+      elseif(msgindex == 10) then -- UNSUBSCRIBE
         local subtree = tree:add(MQTTPROTO, buffer())
         local fixheader_subtree = subtree:add("Fixed Header", nil)
 
@@ -370,12 +398,44 @@ do
         local fixhdr_qos = msgtype:bitfield(5,2)
         subtree:append_text(", QoS: " .. fixhdr_qos)
         
-        if((buffer:len()-offset) > 0) then
-          local payload_subtree = subtree:add("Payload", nil)
-          payload_subtree:add(f.payload_data, buffer(offset, buffer:len()-offset))
-        end    
+        local varheader_subtree = subtree:add("Variable Header", nil)
+
+        local message_id = buffer(offset, 2)
+        offset = offset + 2
+        varheader_subtree:add(f.unsubscribe_message_id, message_id)
+
+        local payload_subtree = subtree:add("Payload", nil)
+        while(offset < buffer:len()) do
+          local topic_len = buffer(offset, 2):uint()
+          offset = offset + 2
+          local topic = buffer(offset, topic_len)
+          offset = offset + topic_len
+
+          payload_subtree:add(f.unsubscribe_topic, topic)
+        end
+        
+        if (buffer:len() > offset) then
+          new_offset = offset
+        end
+
+      
+      elseif(msgindex >= 12 and msgindex <= 14) then -- PINGREQ/PINGRESP/DISCONNECT
+        local subtree = tree:add(MQTTPROTO, buffer())
+        local fixheader_subtree = subtree:add("Fixed Header", nil)
+
+        subtree:append_text(", Message Type: " .. msg_types[msgindex])
+        pinfo.cols.info:set(msg_types[msgindex])
+
+        fixheader_subtree:add(f.message_type, msgtype)
+        fixheader_subtree:add(f.dup, msgtype)
+        fixheader_subtree:add(f.qos, msgtype)
+        fixheader_subtree:add(f.retain, msgtype)
+
+        if (buffer:len() > offset) then
+          new_offset = offset
+        end
       end
-	  
+
 	  return new_offset
 	end
 	
